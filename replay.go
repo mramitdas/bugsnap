@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -11,7 +12,7 @@ import (
 
 func cmdInspect(args []string) error {
 	if len(args) != 1 {
-		return fmt.Errorf("usage: reprokit inspect BUNDLE.zip")
+		return fmt.Errorf("usage: bugsnap inspect BUNDLE.zip")
 	}
 	m, files, err := readBundle(args[0])
 	if err != nil {
@@ -22,7 +23,7 @@ func cmdInspect(args []string) error {
 
 	fmt.Println("\nFiles:")
 	for _, name := range m.Files {
-		fmt.Printf("  %-32s %d bytes\n", name, len(files[name]))
+		fmt.Printf("  %-40s %d bytes\n", name, len(files[name]))
 	}
 	return nil
 }
@@ -31,13 +32,15 @@ func cmdReplay(args []string) error {
 	fs := flag.NewFlagSet("replay", flag.ExitOnError)
 	apply := fs.Bool("apply", false, "apply git patch and restore dependency files")
 	run := fs.Bool("run", false, "re-run the captured command")
+	docker := fs.Bool("docker", false, "re-run inside Docker (builds Dockerfile in --dir, or use --image)")
+	image := fs.String("image", "", "docker image for --docker instead of building a Dockerfile")
 	dir := fs.String("dir", ".", "target directory")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return fmt.Errorf("usage: reprokit replay BUNDLE.zip [--apply] [--run] [--dir DIR]")
+		return fmt.Errorf("usage: bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--dir DIR]")
 	}
 	bundle := rest[0]
 	if len(rest) > 1 {
@@ -46,7 +49,7 @@ func cmdReplay(args []string) error {
 			return err
 		}
 		if fs.NArg() != 0 {
-			return fmt.Errorf("usage: reprokit replay BUNDLE.zip [--apply] [--run] [--dir DIR]")
+			return fmt.Errorf("usage: bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--dir DIR]")
 		}
 	}
 
@@ -57,8 +60,8 @@ func cmdReplay(args []string) error {
 	printSummary(m)
 	printEnvDiff(files)
 
-	if !*apply && !*run {
-		fmt.Println("\ndry run: pass --apply to restore files, --run to execute the captured command")
+	if !*apply && !*run && !*docker {
+		fmt.Println("\ndry run: pass --apply to restore files, --run to execute, --docker to run in a container")
 		return nil
 	}
 
@@ -69,10 +72,14 @@ func cmdReplay(args []string) error {
 		fmt.Println("\napplied git patch and restored dependency files")
 	}
 
+	if len(m.Command.Argv) == 0 {
+		return fmt.Errorf("bundle has no captured command")
+	}
+
+	if *docker {
+		return runDocker(m.Command.Argv, *dir, *image)
+	}
 	if *run {
-		if len(m.Command.Argv) == 0 {
-			return fmt.Errorf("bundle has no captured command")
-		}
 		fmt.Printf("\nrunning: %s\n", strings.Join(m.Command.Argv, " "))
 		c := exec.Command(m.Command.Argv[0], m.Command.Argv[1:]...)
 		c.Dir = *dir
@@ -80,14 +87,54 @@ func cmdReplay(args []string) error {
 		c.Stdout = os.Stdout
 		c.Stderr = os.Stderr
 		if err := c.Run(); err != nil {
-			return fmt.Errorf("replay command failed: %w", err)
+			return exitError{code: exitCodeOf(err)}
 		}
 	}
 	return nil
 }
 
+func runDocker(argv []string, dir, image string) error {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err
+	}
+	if image == "" {
+		if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
+			return fmt.Errorf("--docker needs a Dockerfile in %s (or pass --image)", abs)
+		}
+		image = "bugsnap-replay"
+		fmt.Printf("\nbuilding docker image from %s/Dockerfile\n", abs)
+		build := exec.Command("docker", "build", "-t", image, abs)
+		build.Stdout = os.Stdout
+		build.Stderr = os.Stderr
+		if err := build.Run(); err != nil {
+			return fmt.Errorf("docker build: %w", err)
+		}
+	}
+
+	fmt.Printf("\nrunning in docker (%s): %s\n", image, strings.Join(argv, " "))
+	args := []string{"run", "--rm", "-v", abs + ":/work", "-w", "/work", image}
+	args = append(args, argv...)
+	c := exec.Command("docker", args...)
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return exitError{code: exitCodeOf(err)}
+	}
+	return nil
+}
+
+func exitCodeOf(err error) int {
+	var ee *exec.ExitError
+	if errors.As(err, &ee) {
+		return ee.ExitCode()
+	}
+	return 1
+}
+
 func printSummary(m Manifest) {
-	fmt.Printf("reprokit bundle (v%d)\n", m.Version)
+	fmt.Printf("bugsnap bundle (v%d)\n", m.Version)
 	fmt.Printf("  created: %s\n", m.CreatedAt)
 	fmt.Printf("  host:    %s/%s (%s)\n", m.Host.OS, m.Host.Arch, m.Host.Hostname)
 	if m.Git.SHA != "" {
@@ -121,7 +168,7 @@ func printEnvDiff(files map[string][]byte) {
 
 func applyBundle(files map[string][]byte, dir string) error {
 	if patch := files["git/diff.patch"]; len(patch) > 0 {
-		tmp, err := os.CreateTemp("", "reprokit-*.patch")
+		tmp, err := os.CreateTemp("", "bugsnap-*.patch")
 		if err != nil {
 			return err
 		}

@@ -1,5 +1,6 @@
-/reprokit
-/reprokit.exe
+/bugsnap
+/bugsnap.exe
+dist/
 *.zip
 *.test
 .DS_Store

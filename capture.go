@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,22 +14,30 @@ import (
 	"time"
 )
 
-var depFiles = []string{
-	"go.mod", "go.sum",
-	"package.json", "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb",
-	"requirements.txt", "pyproject.toml", "poetry.lock", "Pipfile.lock",
-	"Cargo.toml", "Cargo.lock",
-	"Gemfile", "Gemfile.lock",
-	"composer.json", "composer.lock",
-	"pom.xml", "build.gradle", "build.gradle.kts",
-	"mix.exs", "mix.lock",
+var depNames = map[string]bool{
+	"go.mod": true, "go.sum": true,
+	"package.json": true, "package-lock.json": true, "yarn.lock": true, "pnpm-lock.yaml": true, "bun.lockb": true,
+	"requirements.txt": true, "pyproject.toml": true, "poetry.lock": true, "Pipfile.lock": true,
+	"Cargo.toml": true, "Cargo.lock": true,
+	"Gemfile": true, "Gemfile.lock": true,
+	"composer.json": true, "composer.lock": true,
+	"pom.xml": true, "build.gradle": true, "build.gradle.kts": true,
+	"mix.exs": true, "mix.lock": true,
+}
+
+var skipDirs = map[string]bool{
+	"node_modules": true, ".git": true, "vendor": true, "dist": true,
+	"build": true, "target": true, ".venv": true, "venv": true,
+	"bin": true, "obj": true, "Pods": true, ".next": true, "coverage": true,
 }
 
 const (
-	maxFile  = 2 << 20
-	maxUntr  = 5 << 20
-	maxLog   = 256 << 10
-	maxLines = 200
+	maxFile     = 2 << 20
+	maxUntr     = 5 << 20
+	maxLog      = 256 << 10
+	maxLines    = 200
+	maxDepDepth = 3
+	maxDepTotal = 100 << 20
 )
 
 func cmdCapture(args []string) error {
@@ -110,7 +119,7 @@ func cmdCapture(args []string) error {
 	if err := os.MkdirAll(*outDir, 0o755); err != nil {
 		return err
 	}
-	name := fmt.Sprintf("reprokit-%s.zip", time.Now().UTC().Format("20060102T150405Z"))
+	name := fmt.Sprintf("bugsnap-%s.zip", time.Now().UTC().Format("20060102T150405Z"))
 	path := filepath.Join(*outDir, name)
 	if err := writeBundle(path, files); err != nil {
 		return err
@@ -189,20 +198,46 @@ func captureGit(dir string) (map[string][]byte, GitInfo) {
 	return files, gi
 }
 
-func captureDeps(dir string) map[string][]byte {
+func captureDeps(root string) map[string][]byte {
 	out := map[string][]byte{}
-	for _, name := range depFiles {
-		full := filepath.Join(dir, name)
-		info, err := os.Stat(full)
-		if err != nil || info.IsDir() || info.Size() > maxFile {
-			continue
-		}
-		b, err := os.ReadFile(full)
+	var total int64
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return nil
 		}
-		out["deps/"+name] = b
-	}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return nil
+		}
+		slash := filepath.ToSlash(rel)
+		depth := 0
+		if slash != "." {
+			depth = strings.Count(slash, "/") + 1
+		}
+		if d.IsDir() {
+			if path == root {
+				return nil
+			}
+			if skipDirs[d.Name()] || strings.HasPrefix(d.Name(), ".") || depth > maxDepDepth {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if depth > maxDepDepth || !depNames[d.Name()] || total >= maxDepTotal {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil || info.Size() > maxFile {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		out["deps/"+slash] = b
+		total += int64(len(b))
+		return nil
+	})
 	return out
 }
 
