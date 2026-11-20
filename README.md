@@ -108,6 +108,12 @@ bugsnap inspect --json bundle.zip | jq '.manifest.command.exit_code'
 bugsnap replay --json bundle.zip --run --dir /tmp/repro | jq '.exit_code'
 ```
 
+## Demo
+
+A 7.7s CursorCam‑generated video showing the full capture‑inspect‑replay workflow in a simulated terminal.
+
+[![bugsnap demo poster](poster.jpg)](bugsnap-demo.mp4)
+
 ## Why this exists
 
 Most "repro" tools assume a hosted error tracker. `bugsnap` is local-first and works with any language, any CI, and any teammate. If it saves you one round of "can you send me your logs and your commit?", it earned its keep.

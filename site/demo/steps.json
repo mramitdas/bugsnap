@@ -1,0 +1,12 @@
+{
+  "name": "bugsnap-demo",
+  "url": "http://localhost:8787/",
+  "viewport": "desktop",
+  "colorScheme": "dark",
+  "timeout": 45000,
+  "steps": [
+    { "pause": 900 },
+    { "click": "role=button[name='Replay demo']", "pauseAfter": 500 },
+    { "waitFor": "text=replay complete", "pauseAfter": 2600 }
+  ]
+}
