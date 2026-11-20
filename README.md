@@ -20,6 +20,12 @@ bugsnap replay  bugsnap-20261120T183500Z.zip --apply --docker
 ## Install
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/mramitdas/bugsnap/main/scripts/install.sh | sh
+```
+
+Or with Go:
+
+```sh
 go install github.com/mramitdas/bugsnap@latest
 ```
 
@@ -46,9 +52,11 @@ cd bugsnap && go build -o bugsnap .
 
 ```
 bugsnap capture [flags] [-- COMMAND [ARGS...]]
-bugsnap inspect BUNDLE.zip
-bugsnap replay  BUNDLE.zip [--apply] [--run] [--docker] [--image IMAGE] [--dir DIR]
+bugsnap inspect BUNDLE.zip [--json]
+bugsnap replay  BUNDLE.zip [--apply] [--run] [--docker] [--image IMAGE] [--json] [--dir DIR]
 ```
+
+Add `--json` to any command for machine-readable output. In `replay --json`, the child command's output goes to stderr so stdout stays valid JSON.
 
 ### capture
 
@@ -92,9 +100,21 @@ Be deliberate: `--apply`, `--run`, and `--docker` change files and execute code.
 - Docker replay mounts your working tree; it does not reproduce the original image or OS.
 - Untracked files over 1 MB and totals over 5 MB are skipped.
 
+### Automation
+
+```sh
+bugsnap capture --json -- npm test | jq -r .bundle
+bugsnap inspect --json bundle.zip | jq '.manifest.command.exit_code'
+bugsnap replay --json bundle.zip --run --dir /tmp/repro | jq '.exit_code'
+```
+
 ## Why this exists
 
 Most "repro" tools assume a hosted error tracker. `bugsnap` is local-first and works with any language, any CI, and any teammate. If it saves you one round of "can you send me your logs and your commit?", it earned its keep.
+
+## Contributing
+
+Issues and PRs are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md). The project keeps a zero-dependency policy and runs tests on Linux, macOS, and Windows.
 
 ## License
 

@@ -10,17 +10,52 @@ import (
 	"strings"
 )
 
+type replayResult struct {
+	Bundle   string   `json:"bundle"`
+	Applied  bool     `json:"applied"`
+	Ran      bool     `json:"ran"`
+	ExitCode *int     `json:"exit_code,omitempty"`
+	Manifest Manifest `json:"manifest"`
+}
+
 func cmdInspect(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: bugsnap inspect BUNDLE.zip")
+	fs := flag.NewFlagSet("inspect", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
 	}
-	m, files, err := readBundle(args[0])
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return fmt.Errorf("usage: bugsnap inspect BUNDLE.zip [--json]")
+	}
+	bundle := rest[0]
+	if len(rest) > 1 {
+		if err := fs.Parse(rest[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return fmt.Errorf("usage: bugsnap inspect BUNDLE.zip [--json]")
+		}
+	}
+
+	m, files, err := readBundle(bundle)
 	if err != nil {
 		return err
 	}
+	if *jsonOut {
+		sizes := make(map[string]int, len(m.Files))
+		for _, name := range m.Files {
+			sizes[name] = len(files[name])
+		}
+		return emitJSON(struct {
+			Bundle   string         `json:"bundle"`
+			Manifest Manifest       `json:"manifest"`
+			Files    map[string]int `json:"files"`
+		}{bundle, m, sizes})
+	}
+
 	printSummary(m)
 	printEnvDiff(files)
-
 	fmt.Println("\nFiles:")
 	for _, name := range m.Files {
 		fmt.Printf("  %-40s %d bytes\n", name, len(files[name]))
@@ -35,12 +70,13 @@ func cmdReplay(args []string) error {
 	docker := fs.Bool("docker", false, "re-run inside Docker (builds Dockerfile in --dir, or use --image)")
 	image := fs.String("image", "", "docker image for --docker instead of building a Dockerfile")
 	dir := fs.String("dir", ".", "target directory")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON (child output goes to stderr)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	rest := fs.Args()
 	if len(rest) == 0 {
-		return fmt.Errorf("usage: bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--dir DIR]")
+		return fmt.Errorf("usage: bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--json] [--dir DIR]")
 	}
 	bundle := rest[0]
 	if len(rest) > 1 {
@@ -49,7 +85,7 @@ func cmdReplay(args []string) error {
 			return err
 		}
 		if fs.NArg() != 0 {
-			return fmt.Errorf("usage: bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--dir DIR]")
+			return fmt.Errorf("usage: bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--json] [--dir DIR]")
 		}
 	}
 
@@ -57,10 +93,15 @@ func cmdReplay(args []string) error {
 	if err != nil {
 		return err
 	}
-	printSummary(m)
-	printEnvDiff(files)
+	if !*jsonOut {
+		printSummary(m)
+		printEnvDiff(files)
+	}
 
 	if !*apply && !*run && !*docker {
+		if *jsonOut {
+			return emitJSON(replayResult{Bundle: bundle, Manifest: m})
+		}
 		fmt.Println("\ndry run: pass --apply to restore files, --run to execute, --docker to run in a container")
 		return nil
 	}
@@ -69,55 +110,95 @@ func cmdReplay(args []string) error {
 		if err := applyBundle(files, *dir); err != nil {
 			return err
 		}
-		fmt.Println("\napplied git patch and restored dependency files")
+		if !*jsonOut {
+			fmt.Println("\napplied git patch and restored dependency files")
+		}
 	}
 
 	if len(m.Command.Argv) == 0 {
 		return fmt.Errorf("bundle has no captured command")
 	}
 
+	ran := *run || *docker
+	var runErr error
 	if *docker {
-		return runDocker(m.Command.Argv, *dir, *image)
-	}
-	if *run {
-		fmt.Printf("\nrunning: %s\n", strings.Join(m.Command.Argv, " "))
-		c := exec.Command(m.Command.Argv[0], m.Command.Argv[1:]...)
-		c.Dir = *dir
-		c.Stdin = os.Stdin
-		c.Stdout = os.Stdout
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
-			return exitError{code: exitCodeOf(err)}
+		runErr = runDocker(m.Command.Argv, *dir, *image, *jsonOut)
+	} else if *run {
+		if !*jsonOut {
+			fmt.Printf("\nrunning: %s\n", strings.Join(m.Command.Argv, " "))
 		}
+		runErr = runLocal(m.Command.Argv, *dir, *jsonOut)
+	}
+
+	code := 0
+	if runErr != nil {
+		var ee exitError
+		if !errors.As(runErr, &ee) {
+			return runErr
+		}
+		code = ee.code
+	}
+
+	if *jsonOut {
+		res := replayResult{Bundle: bundle, Applied: *apply, Ran: ran, Manifest: m}
+		if ran {
+			res.ExitCode = &code
+		}
+		if err := emitJSON(res); err != nil {
+			return err
+		}
+	}
+	if runErr != nil {
+		return exitError{code: code}
 	}
 	return nil
 }
 
-func runDocker(argv []string, dir, image string) error {
+func runLocal(argv []string, dir string, jsonMode bool) error {
+	c := exec.Command(argv[0], argv[1:]...)
+	c.Dir = dir
+	c.Stdin = os.Stdin
+	c.Stdout = os.Stdout
+	if jsonMode {
+		c.Stdout = os.Stderr
+	}
+	c.Stderr = os.Stderr
+	if err := c.Run(); err != nil {
+		return exitError{code: exitCodeOf(err)}
+	}
+	return nil
+}
+
+func runDocker(argv []string, dir, image string, jsonMode bool) error {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err
 	}
+	logw := os.Stdout
+	if jsonMode {
+		logw = os.Stderr
+	}
+
 	if image == "" {
 		if _, err := os.Stat(filepath.Join(dir, "Dockerfile")); err != nil {
 			return fmt.Errorf("--docker needs a Dockerfile in %s (or pass --image)", abs)
 		}
 		image = "bugsnap-replay"
-		fmt.Printf("\nbuilding docker image from %s/Dockerfile\n", abs)
+		fmt.Fprintf(logw, "\nbuilding docker image from %s/Dockerfile\n", abs)
 		build := exec.Command("docker", "build", "-t", image, abs)
-		build.Stdout = os.Stdout
+		build.Stdout = logw
 		build.Stderr = os.Stderr
 		if err := build.Run(); err != nil {
 			return fmt.Errorf("docker build: %w", err)
 		}
 	}
 
-	fmt.Printf("\nrunning in docker (%s): %s\n", image, strings.Join(argv, " "))
+	fmt.Fprintf(logw, "\nrunning in docker (%s): %s\n", image, strings.Join(argv, " "))
 	args := []string{"run", "--rm", "-v", abs + ":/work", "-w", "/work", image}
 	args = append(args, argv...)
 	c := exec.Command("docker", args...)
 	c.Stdin = os.Stdin
-	c.Stdout = os.Stdout
+	c.Stdout = logw
 	c.Stderr = os.Stderr
 	if err := c.Run(); err != nil {
 		return exitError{code: exitCodeOf(err)}

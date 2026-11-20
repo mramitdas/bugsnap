@@ -6,7 +6,11 @@ import (
 	"os"
 )
 
-const version = "0.1.0"
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
 type exitError struct{ code int }
 
@@ -26,7 +30,7 @@ func main() {
 	case "replay":
 		err = cmdReplay(os.Args[2:])
 	case "version", "-v", "--version":
-		fmt.Println("bugsnap " + version)
+		fmt.Printf("bugsnap %s\ncommit: %s\nbuilt:  %s\n", version, commit, date)
 	case "help", "-h", "--help":
 		usage()
 	default:
@@ -49,8 +53,8 @@ func usage() {
 
 Usage:
   bugsnap capture [flags] [-- COMMAND [ARGS...]]
-  bugsnap inspect BUNDLE.zip
-  bugsnap replay BUNDLE.zip [--apply] [--run] [--dir DIR]
+  bugsnap inspect BUNDLE.zip [--json]
+  bugsnap replay BUNDLE.zip [--apply] [--run] [--docker] [--json] [--dir DIR]
   bugsnap version
 
 capture flags:
@@ -58,11 +62,13 @@ capture flags:
   --tail N      log lines to keep (default 200)
   --out DIR     output directory (default ".")
   --note TEXT   note to attach to the bundle
+  --json        print machine-readable JSON
 
 Examples:
   bugsnap capture -- go test ./...
   bugsnap capture --log app.log --note "checkout fails" -- ./run.sh
   bugsnap inspect bugsnap-20260101T120000Z.zip
   bugsnap replay bugsnap-20260101T120000Z.zip --apply --run
+  bugsnap replay bugsnap-20260101T120000Z.zip --docker --image node:22
 `)
 }

@@ -1,0 +1,36 @@
+name: Bug report
+description: Something in bugsnap did not work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Include the exact command and the output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: bugsnap version
+      description: Output of `bugsnap version`
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: OS / architecture
+      placeholder: macOS 15 arm64, Ubuntu 24.04 amd64, Windows 11 amd64
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Do not paste real secrets. Share a redacted bundle if useful.

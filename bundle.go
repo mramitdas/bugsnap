@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"sort"
@@ -65,6 +66,15 @@ func readBundle(path string) (Manifest, map[string][]byte, error) {
 		}
 	}
 	return m, files, nil
+}
+
+func emitJSON(v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	fmt.Println(string(b))
+	return nil
 }
 
 func sortedFiles(files map[string][]byte) []string {

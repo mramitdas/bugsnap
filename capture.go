@@ -46,6 +46,7 @@ func cmdCapture(args []string) error {
 	tail := fs.Int("tail", maxLines, "log lines to keep")
 	outDir := fs.String("out", ".", "output directory")
 	note := fs.String("note", "", "note to attach to the bundle")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -123,6 +124,13 @@ func cmdCapture(args []string) error {
 	path := filepath.Join(*outDir, name)
 	if err := writeBundle(path, files); err != nil {
 		return err
+	}
+
+	if *jsonOut {
+		return emitJSON(struct {
+			Bundle   string   `json:"bundle"`
+			Manifest Manifest `json:"manifest"`
+		}{path, m})
 	}
 
 	fmt.Printf("captured %s\n", path)
