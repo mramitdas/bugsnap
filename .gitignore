@@ -1,0 +1,5 @@
+/reprokit
+/reprokit.exe
+*.zip
+*.test
+.DS_Store
